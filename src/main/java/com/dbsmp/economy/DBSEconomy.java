@@ -1,445 +1,235 @@
-package com.dbsmp.economy;
+package com.ryden.dbsmp;
 
-import org.bukkit.Bukkit;
-import org.bukkit.ChatColor;
-import org.bukkit.Material;
-import org.bukkit.command.Command;
-import org.bukkit.command.CommandExecutor;
-import org.bukkit.command.CommandSender;
-import org.bukkit.configuration.file.FileConfiguration;
+import java.io.*;
+import java.util.*;
+import org.bukkit.*;
+import org.bukkit.command.*;
 import org.bukkit.configuration.file.YamlConfiguration;
-import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
+import org.bukkit.event.*;
 import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.inventory.InventoryCloseEvent;
-import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.ItemStack;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.inventory.*;
 import org.bukkit.inventory.meta.ItemMeta;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.*;
+public class DBSMPEconomy extends JavaPlugin implements Listener {
+    private File dataDir;
+    private final Map<UUID, Double> balances = new HashMap<UUID, Double>();
+    private final Map<UUID, Set<UUID>> friends = new HashMap<UUID, Set<UUID>>();
+    private final Map<UUID, UUID> friendRequests = new HashMap<UUID, UUID>();
+    private final Map<UUID, Trade> trades = new HashMap<UUID, Trade>();
+    private final Map<UUID, UUID> tradeRequests = new HashMap<UUID, UUID>();
+    private final Map<UUID, Double> tradeMoney = new HashMap<UUID, Double>();
+    private final Map<UUID, List<ItemStack>> tradeItems = new HashMap<UUID, List<ItemStack>>();
+    private final Map<UUID, Integer> totalEarned = new HashMap<UUID, Integer>();
+    private final Map<UUID, Integer> tradesCompleted = new HashMap<UUID, Integer>();
+    private final Map<UUID, Integer> itemsSold = new HashMap<UUID, Integer>();
+    private final String shopTitle = ChatColor.DARK_GREEN + "DBSMP Item Shop";
 
-public class DBSEconomy extends JavaPlugin implements Listener {
-
-    private final Map<UUID, Double> balances = new HashMap<>();
-    private final Map<UUID, UUID> pendingTrades = new HashMap<>();
-    private final Map<UUID, TradeSession> activeTrades = new HashMap<>();
-    private final Map<UUID, List<UUID>> friendRequests = new HashMap<>();
-    private final Map<UUID, List<UUID>> friendsList = new HashMap<>();
-    
-    private File dataFile;
-    private FileConfiguration dataConfig;
-
-    @Override
     public void onEnable() {
-        saveDefaultConfig();
-        createDataConfig();
-        loadPlayerData();
-        
+        dataDir = new File(getDataFolder(), "players");
+        if (!dataDir.exists()) dataDir.mkdirs();
         getServer().getPluginManager().registerEvents(this, this);
-        
-        getCommand("balance").setExecutor(new BalanceCommand());
-        getCommand("pay").setExecutor(new PayCommand());
-        getCommand("shop").setExecutor(new ShopCommand());
-        getCommand("sell").setExecutor(new SellCommand());
-        getCommand("trade").setExecutor(new TradeCommand());
-        getCommand("friend").setExecutor(new FriendCommand());
-        
-        getLogger().info("DBSMP Economy Plugin Enabled Successfully for Eaglercraft 1.8.8!");
+        getLogger().info("DBSMP Economy enabled. Player data is saved by UUID and is not reset by bans.");
     }
-
-    @Override
     public void onDisable() {
-        savePlayerData();
-    }
-
-    private void createDataConfig() {
-        dataFile = new File(getDataFolder(), "playerdata.yml");
-        if (!dataFile.exists()) {
-            dataFile.getParentFile().mkdirs();
-            try {
-                dataFile.createNewFile();
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        dataConfig = YamlConfiguration.loadConfiguration(dataFile);
-    }
-
-    private void loadPlayerData() {
-        if (dataConfig.getConfigurationSection("balances") != null) {
-            for (String key : dataConfig.getConfigurationSection("balances").getKeys(false)) {
-                UUID uuid = UUID.fromString(key);
-                double bal = dataConfig.getDouble("balances." + key);
-                balances.put(uuid, bal);
-            }
-        }
-        if (dataConfig.getConfigurationSection("friends") != null) {
-            for (String key : dataConfig.getConfigurationSection("friends").getKeys(false)) {
-                UUID uuid = UUID.fromString(key);
-                List<String> list = dataConfig.getStringList("friends." + key);
-                List<UUID> fUUIDs = new ArrayList<>();
-                for (String s : list) {
-                    fUUIDs.add(UUID.fromString(s));
-                }
-                friendsList.put(uuid, fUUIDs);
-            }
+        for (UUID id : new HashSet<UUID>(balances.keySet())) save(id);
+        for (Trade t : new HashSet<Trade>(trades.values())) {
+            if (t != null) cancelTrade(t, "Server restarting; trade cancelled.");
         }
     }
-
-    private void savePlayerData() {
-        for (Map.Entry<UUID, Double> entry : balances.entrySet()) {
-            dataConfig.set("balances." + entry.getKey().toString(), entry.getValue());
+    private File file(UUID id) { return new File(dataDir, id.toString() + ".yml"); }
+    private void load(UUID id) {
+        if (balances.containsKey(id)) return;
+        YamlConfiguration y = YamlConfiguration.loadConfiguration(file(id));
+        balances.put(id, y.contains("balance") ? y.getDouble("balance") : 30000.0);
+        Set<UUID> fs = new HashSet<UUID>();
+        for (String s : y.getStringList("friends")) try { fs.add(UUID.fromString(s)); } catch (Exception ignored) {}
+        friends.put(id, fs);
+        totalEarned.put(id, y.getInt("stats.total-earned", 0));
+        tradesCompleted.put(id, y.getInt("stats.trades-completed", 0));
+        itemsSold.put(id, y.getInt("stats.items-sold", 0));
+    }
+    private void save(UUID id) {
+        load(id);
+        YamlConfiguration y = new YamlConfiguration();
+        y.set("uuid", id.toString());
+        y.set("last-known-name", Bukkit.getOfflinePlayer(id).getName());
+        y.set("balance", balances.get(id));
+        List<String> fs = new ArrayList<String>();
+        for (UUID f : friends.get(id)) fs.add(f.toString());
+        y.set("friends", fs);
+        y.set("stats.total-earned", totalEarned.get(id));
+        y.set("stats.trades-completed", tradesCompleted.get(id));
+        y.set("stats.items-sold", itemsSold.get(id));
+        try { y.save(file(id)); } catch (IOException e) { getLogger().warning("Could not save player " + id + ": " + e.getMessage()); }
+    }
+    private void msg(CommandSender s, String m) { s.sendMessage(ChatColor.GREEN + "[DBSMP] " + ChatColor.GRAY + m); }
+    private Player online(String name) { return Bukkit.getPlayerExact(name); }
+    private boolean amount(String s) {
+        try { return Double.parseDouble(s) > 0 && !Double.isInfinite(Double.parseDouble(s)); }
+        catch (Exception e) { return false; }
+    }
+    private String money(double n) { return String.format(Locale.US, "%,.2f", n); }
+    private void openShop(Player p) {
+        Inventory inv = Bukkit.createInventory(null, 54, shopTitle);
+        Material[] mats = {Material.IRON_INGOT, Material.GOLD_INGOT, Material.DIAMOND, Material.BOW,
+            Material.ARROW, Material.IRON_SWORD, Material.DIAMOND_SWORD, Material.IRON_CHESTPLATE,
+            Material.DIAMOND_CHESTPLATE, Material.IRON_HELMET, Material.DIAMOND_HELMET,
+            Material.IRON_LEGGINGS, Material.DIAMOND_LEGGINGS, Material.IRON_BOOTS,
+            Material.DIAMOND_BOOTS, Material.ENCHANTED_BOOK, Material.EXP_BOTTLE, Material.GOLDEN_APPLE,
+            Material.ENDER_PEARL, Material.ARROW};
+        double[] prices = {250, 400, 1200, 800, 8, 700, 2500, 1100, 5000, 650, 2200,
+            950, 4200, 600, 2000, 1800, 30, 600, 350, 8};
+        for (int i=0;i<mats.length;i++) {
+            ItemStack it = new ItemStack(mats[i]);
+            ItemMeta meta = it.getItemMeta();
+            meta.setDisplayName(ChatColor.YELLOW + mats[i].toString().replace('_',' '));
+            meta.setLore(Arrays.asList(ChatColor.GRAY + "Price: $" + money(prices[i]), ChatColor.GREEN + "Click to buy"));
+            it.setItemMeta(meta);
+            inv.setItem(i, it);
         }
-        for (Map.Entry<UUID, List<UUID>> entry : friendsList.entrySet()) {
-            List<String> sList = new ArrayList<>();
-            for (UUID u : entry.getValue()) {
-                sList.add(u.toString());
-            }
-            dataConfig.set("friends." + entry.getKey().toString(), sList);
+        p.openInventory(inv);
+    }
+    @EventHandler public void onShopClick(InventoryClickEvent e) {
+        if (e.getView() == null || !shopTitle.equals(e.getView().getTitle())) return;
+        e.setCancelled(true);
+        if (!(e.getWhoClicked() instanceof Player) || e.getRawSlot() < 0 || e.getRawSlot() >= 20) return;
+        Player p = (Player)e.getWhoClicked();
+        int slot = e.getRawSlot();
+        Material[] mats = {Material.IRON_INGOT, Material.GOLD_INGOT, Material.DIAMOND, Material.BOW,
+            Material.ARROW, Material.IRON_SWORD, Material.DIAMOND_SWORD, Material.IRON_CHESTPLATE,
+            Material.DIAMOND_CHESTPLATE, Material.IRON_HELMET, Material.DIAMOND_HELMET,
+            Material.IRON_LEGGINGS, Material.DIAMOND_LEGGINGS, Material.IRON_BOOTS,
+            Material.DIAMOND_BOOTS, Material.ENCHANTED_BOOK, Material.EXP_BOTTLE, Material.GOLDEN_APPLE,
+            Material.ENDER_PEARL, Material.ARROW};
+        double[] prices = {250,400,1200,800,8,700,2500,1100,5000,650,2200,950,4200,600,2000,1800,30,600,350,8};
+        if (slot >= mats.length) return;
+        load(p.getUniqueId());
+        if (balances.get(p.getUniqueId()) < prices[slot]) { msg(p, "You need $" + money(prices[slot]) + "."); return; }
+        ItemStack item = new ItemStack(mats[slot]);
+        if (p.getInventory().firstEmpty() == -1) { msg(p, "Your inventory is full."); return; }
+        balances.put(p.getUniqueId(), balances.get(p.getUniqueId()) - prices[slot]);
+        p.getInventory().addItem(item);
+        save(p.getUniqueId());
+        msg(p, "Bought " + mats[slot].toString().replace('_',' ') + " for $" + money(prices[slot]) + ".");
+    }
+    public boolean onCommand(CommandSender s, Command c, String label, String[] a) {
+        String cmd = c.getName().toLowerCase();
+        if (cmd.equals("eco")) {
+            if (!s.hasPermission("dbsmp.admin")) { msg(s, "No permission."); return true; }
+            if (a.length != 3 || !(a[0].equalsIgnoreCase("give") || a[0].equalsIgnoreCase("take") || a[0].equalsIgnoreCase("set")) || !amount(a[2])) { msg(s, "Usage: /eco <give|take|set> <player> <amount>"); return true; }
+            OfflinePlayer op = Bukkit.getOfflinePlayer(a[1]); UUID id = op.getUniqueId(); load(id);
+            double v = Double.parseDouble(a[2]), b = balances.get(id);
+            balances.put(id, a[0].equalsIgnoreCase("give") ? b+v : a[0].equalsIgnoreCase("take") ? Math.max(0,b-v) : v);
+            save(id); msg(s, "Balance for " + a[1] + " is now $" + money(balances.get(id))); return true;
         }
-        try {
-            dataConfig.save(dataFile);
-        } catch (IOException e) {
-            e.printStackTrace();
+        if (cmd.equals("bal")) {
+            if (a.length > 0 && s.hasPermission("dbsmp.admin")) {
+                OfflinePlayer op=Bukkit.getOfflinePlayer(a[0]); load(op.getUniqueId()); msg(s, a[0] + " has $" + money(balances.get(op.getUniqueId()))); return true;
+            }
+            if (!(s instanceof Player)) { msg(s, "Players only."); return true; }
+            Player p=(Player)s; load(p.getUniqueId()); msg(p, "Balance: $" + money(balances.get(p.getUniqueId()))); return true;
         }
-    }
-
-    public double getBalance(UUID uuid) {
-        return balances.getOrDefault(uuid, 30000.0);
-    }
-
-    public void setBalance(UUID uuid, double amount) {
-        balances.put(uuid, amount);
-        savePlayerData();
-    }
-
-    // --- GUI SHOP SYSTEM ---
-    public void openShop(Player player) {
-        Inventory shop = Bukkit.createInventory(null, 27, ChatColor.DARK_BLUE + "DBSMP Shop Menu");
-        
-        shop.setItem(10, createShopItem(Material.DIAMOND_CHESTPLATE, "§bDiamond Chestplate", 5000));
-        shop.setItem(11, createShopItem(Material.DIAMOND_SWORD, "§bDiamond Sword", 3000));
-        shop.setItem(12, createShopItem(Material.BOW, "§eHunter Bow", 1500));
-        shop.setItem(14, createShopItem(Material.ARROW, "§7Arrows x64", 200));
-        shop.setItem(15, createShopItem(Material.ENCHANTED_BOOK, "§dSharpness V Book", 10000));
-        shop.setItem(16, createShopItem(Material.ENCHANTED_BOOK, "§dProtection IV Book", 10000));
-        
-        player.openInventory(shop);
-    }
-
-    private ItemStack createShopItem(Material mat, String name, int price) {
-        ItemStack item = new ItemStack(mat);
-        ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName(name);
-        meta.setLore(Arrays.asList("§7Price: §a$" + price, "§eClick to purchase"));
-        item.setItemMeta(meta);
-        return item;
-    }
-
-    @EventHandler
-    public void onInventoryClick(InventoryClickEvent event) {
-        if (event.getInventory() == null) return;
-        Player player = (Player) event.getWhoClicked();
-        
-        if (event.getInventory().getTitle().equals(ChatColor.DARK_BLUE + "DBSMP Shop Menu")) {
-            event.setCancelled(true);
-            ItemStack clicked = event.getCurrentItem();
-            if (clicked == null || !clicked.hasItemMeta() || clicked.getItemMeta().getLore() == null) return;
-            
-            String priceStr = ChatColor.stripColor(clicked.getItemMeta().getLore().get(0)).replace("Price: $", "");
-            double price = Double.parseDouble(priceStr);
-            double bal = getBalance(player.getUniqueId());
-            
-            if (bal < price) {
-                player.sendMessage("§cYou don't have enough money!");
-                return;
-            }
-            
-            setBalance(player.getUniqueId(), bal - price);
-            ItemStack itemToGive = new ItemStack(clicked.getType(), clicked.getAmount() == 0 ? 1 : clicked.getAmount());
-            ItemMeta meta = itemToGive.getItemMeta();
-            
-            if (clicked.getType() == Material.ENCHANTED_BOOK) {
-                if (clicked.getItemMeta().getDisplayName().contains("Sharpness")) {
-                    meta.addEnchant(Enchantment.DAMAGE_ALL, 5, true);
-                } else if (clicked.getItemMeta().getDisplayName().contains("Protection")) {
-                    meta.addEnchant(Enchantment.PROTECTION_ENVIRONMENTAL, 4, true);
-                }
-            }
-            itemToGive.setItemMeta(meta);
-            player.getInventory().addItem(itemToGive);
-            player.sendMessage("§aPurchased successfully! New balance: $" + (bal - price));
-            return;
+        if (cmd.equals("pay")) {
+            if (!(s instanceof Player) || a.length != 2 || !amount(a[1])) { msg(s, "Usage: /pay <player> <amount>"); return true; }
+            Player p=(Player)s, t=online(a[0]); if(t==null || t.equals(p)){msg(p,"That player must be online and cannot be you.");return true;}
+            double v=Double.parseDouble(a[1]); load(p.getUniqueId());load(t.getUniqueId());
+            if(balances.get(p.getUniqueId())<v){msg(p,"Not enough money.");return true;}
+            balances.put(p.getUniqueId(),balances.get(p.getUniqueId())-v); balances.put(t.getUniqueId(),balances.get(t.getUniqueId())+v);
+            save(p.getUniqueId());save(t.getUniqueId());msg(p,"Sent $"+money(v)+" to "+t.getName()+".");msg(t,"You received $"+money(v)+" from "+p.getName()+".");return true;
         }
-
-        if (event.getInventory().getTitle().contains("DBSMP Trading Interface")) {
-            UUID uuid = player.getUniqueId();
-            if (!activeTrades.containsKey(uuid)) return;
-            
-            TradeSession session = activeTrades.get(uuid);
-            int slot = event.getRawSlot();
-            
-            // Prevent touching the dividers, status buttons, or opponent rows
-            if (session.isDividerOrControlSlot(player, slot)) {
-                event.setCancelled(true);
-                if (session.isAcceptSlot(player, slot)) {
-                    session.toggleAccept(player);
-                }
-                return;
-            }
-            
-            // If they clicked their own inventory slot to add an item
-            if (slot >= event.getInventory().getSize()) {
-                // Let standard inventory move handle it or code custom logic below for simplicity
-                return;
-            }
+        if (cmd.equals("shop")) { if(s instanceof Player) openShop((Player)s); else msg(s,"Players only."); return true; }
+        if (cmd.equals("sell")) {
+            if (!(s instanceof Player)) { msg(s,"Players only.");return true; }
+            Player p=(Player)s; ItemStack hand=p.getItemInHand(); if(hand==null || hand.getType()==Material.AIR){msg(p,"Hold an item in your hand first.");return true;}
+            double unit=priceFor(hand.getType()); int count=hand.getAmount(); double total=unit*count;
+            if(unit<=0){msg(p,"The shop does not buy that item.");return true;}
+            p.setItemInHand(null);load(p.getUniqueId());balances.put(p.getUniqueId(),balances.get(p.getUniqueId())+total);
+            itemsSold.put(p.getUniqueId(),itemsSold.get(p.getUniqueId())+count);totalEarned.put(p.getUniqueId(),totalEarned.get(p.getUniqueId())+(int)total);save(p.getUniqueId());
+            msg(p,"Sold "+count+" "+hand.getType().toString().replace('_',' ')+" for $"+money(total)+".");return true;
         }
-    }
-
-    @EventHandler
-    public void onInventoryClose(InventoryCloseEvent event) {
-        Player player = (Player) event.getPlayer();
-        if (event.getInventory().getTitle().contains("DBSMP Trading Interface")) {
-            TradeSession session = activeTrades.remove(player.getUniqueId());
-            if (session != null) {
-                session.cancel();
-            }
-        }
-    }
-
-    // --- COMMAND IMPLEMENTATIONS ---
-    private class BalanceCommand implements CommandExecutor {
-        @Override
-        public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-            if (!(sender instanceof Player)) return true;
-            Player p = (Player) sender;
-            p.sendMessage("§aYour Balance: §e$" + getBalance(p.getUniqueId()));
-            return true;
-        }
-    }
-
-    private class PayCommand implements CommandExecutor {
-        @Override
-        public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-            if (!(sender instanceof Player)) return true;
-            Player p = (Player) sender;
-            if (args.length < 2) {
-                p.sendMessage("§cUsage: /pay <player> <amount>");
-                return true;
-            }
-            Player target = Bukkit.getPlayer(args[0]);
-            if (target == null) {
-                p.sendMessage("§cPlayer not found.");
-                return true;
-            }
-            try {
-                double amount = Double.parseDouble(args[1]);
-                if (amount <= 0) throw new NumberFormatException();
-                double pBal = getBalance(p.getUniqueId());
-                if (pBal < amount) {
-                    p.sendMessage("§cInsufficient funds.");
-                    return true;
-                }
-                setBalance(p.getUniqueId(), pBal - amount);
-                setBalance(target.getUniqueId(), getBalance(target.getUniqueId()) + amount);
-                p.sendMessage("§aSent $" + amount + " to " + target.getName());
-                target.sendMessage("§aReceived $" + amount + " from " + p.getName());
-            } catch (NumberFormatException e) {
-                p.sendMessage("§cInvalid number amount.");
-            }
-            return true;
-        }
-    }
-
-    private class ShopCommand implements CommandExecutor {
-        @Override
-        public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-            if (!(sender instanceof Player)) return true;
-            openShop((Player) sender);
-            return true;
-        }
-    }
-
-    private class SellCommand implements CommandExecutor {
-        @Override
-        public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-            if (!(sender instanceof Player)) return true;
-            Player p = (Player) sender;
-            ItemStack item = p.getItemInHand();
-            if (item == null || item.getType() == Material.AIR) {
-                p.sendMessage("§cHold an item in your hand to sell.");
-                return true;
-            }
-            double val = 0;
-            if (item.getType() == Material.DIAMOND) val = 100;
-            else if (item.getType() == Material.GOLD_INGOT) val = 50;
-            else if (item.getType() == Material.IRON_INGOT) val = 20;
-            else if (item.getType() == Material.COAL) val = 5;
-            
-            if (val == 0) {
-                p.sendMessage("§cThat item cannot be sold to the server.");
-                return true;
-            }
-            int amt = item.getAmount();
-            double finalPayout = val * amt;
-            p.setItemInHand(null);
-            setBalance(p.getUniqueId(), getBalance(p.getUniqueId()) + finalPayout);
-            p.sendMessage("§aSold " + amt + " " + item.getType().name() + " for §e$" + finalPayout);
-            return true;
-        }
-    }
-
-    private class TradeCommand implements CommandExecutor {
-        @Override
-        public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-            if (!(sender instanceof Player)) return true;
-            Player p = (Player) sender;
-            if (args.length < 1) {
-                p.sendMessage("§cUsage: /trade <player>");
-                return true;
-            }
-            Player target = Bukkit.getPlayer(args[0]);
-            if (target == null || target.equals(p)) {
-                p.sendMessage("§cInvalid target player.");
-                return true;
-            }
-            if (pendingTrades.get(target.getUniqueId()) == p.getUniqueId()) {
-                pendingTrades.remove(target.getUniqueId());
-                TradeSession session = new TradeSession(p, target, DBSEconomy.this);
-                activeTrades.put(p.getUniqueId(), session);
-                activeTrades.put(target.getUniqueId(), session);
-                session.open();
-            } else {
-                pendingTrades.put(p.getUniqueId(), target.getUniqueId());
-                p.sendMessage("§aTrade request sent to " + target.getName());
-                target.sendMessage("§a" + p.getName() + " wants to trade. Type §e/trade " + p.getName() + " §ato accept.");
-            }
-            return true;
-        }
-    }
-
-    private class FriendCommand implements CommandExecutor {
-        @Override
-        public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-            if (!(sender instanceof Player)) return true;
-            Player p = (Player) sender;
-            if (args.length < 2) {
-                p.sendMessage("§e/friend add <name> §7- Send a friend request");
-                p.sendMessage("§e/friend list §7- View your current friends");
-                return true;
-            }
-            if (args[0].equalsIgnoreCase("add")) {
-                Player target = Bukkit.getPlayer(args[1]);
-                if (target == null || target.equals(p)) {
-                    p.sendMessage("§cPlayer online not found.");
-                    return true;
-                }
-                List<UUID> reqs = friendRequests.computeIfAbsent(target.getUniqueId(), k -> new ArrayList<>());
-                if (friendRequests.containsKey(p.getUniqueId()) && friendRequests.get(p.getUniqueId()).contains(target.getUniqueId())) {
-                    // Mutual accept
-                    friendRequests.get(p.getUniqueId()).remove(target.getUniqueId());
-                    friendsList.computeIfAbsent(p.getUniqueId(), k -> new ArrayList<>()).add(target.getUniqueId());
-                    friendsList.computeIfAbsent(target.getUniqueId(), k -> new ArrayList<>()).add(p.getUniqueId());
-                    p.sendMessage("§aYou and " + target.getName() + " are now friends!");
-                    target.sendMessage("§aYou and " + p.getName() + " are now friends!");
-                } else {
-                    reqs.add(p.getUniqueId());
-                    p.sendMessage("§aFriend request sent to " + target.getName());
-                    target.sendMessage("§a" + p.getName() + " sent you a friend request. Type §e/friend add " + p.getName() + " §ato accept.");
-                }
-            } else if (args[0].equalsIgnoreCase("list")) {
-                List<UUID> friends = friendsList.getOrDefault(p.getUniqueId(), new ArrayList<>());
-                p.sendMessage("§b--- Friends List ---");
-                for (UUID u : friends) {
-                    p.sendMessage("§7- §f" + Bukkit.getOfflinePlayer(u).getName());
-                }
-            }
-            return true;
-        }
-    }
-}
-
-class TradeSession {
-    private final Player p1;
-    private final Player p2;
-    private final DBSEconomy plugin;
-    private final Inventory inv;
-    private boolean p1Ready = false;
-    private boolean p2Ready = false;
-
-    public TradeSession(Player p1, Player p2, DBSEconomy plugin) {
-        this.p1 = p1;
-        this.p2 = p2;
-        this.plugin = plugin;
-        this.inv = Bukkit.createInventory(null, 45, "DBSMP Trading Interface");
-        setupUI();
-    }
-
-    private void setupUI() {
-        ItemStack pane = new ItemStack(Material.STAINED_GLASS_PANE, 1, (short) 15);
-        ItemMeta meta = pane.getItemMeta();
-        meta.setDisplayName(" ");
-        pane.setItemMeta(meta);
-        
-        for (int i = 4; i < 45; i += 9) {
-            inv.setItem(i, pane);
-        }
-        updateStatusButtons();
-    }
-
-    private void updateStatusButtons() {
-        inv.setItem(40, createStatusItem(p1Ready ? ChatColor.GREEN + "You are READY" : ChatColor.RED + "Click to Ready Up"));
-        inv.setItem(44, createStatusItem(p2Ready ? ChatColor.GREEN + "Opponent READY" : ChatColor.RED + "Opponent Not Ready"));
-    }
-
-    private ItemStack createStatusItem(String title) {
-        ItemStack item = new ItemStack(Material.WOOL, 1, (short) (title.contains("READY") ? 5 : 14));
-        ItemMeta meta = item.getItemMeta();
-        meta.setDisplayName(title);
-        item.setItemMeta(meta);
-        return item;
-    }
-
-    public void open() {
-        p1.openInventory(inv);
-        p2.openInventory(inv);
-    }
-
-    public boolean isDividerOrControlSlot(Player p, int slot) {
-        if (slot % 9 == 4 || slot >= 36) return true;
-        if (p.equals(p1) && slot % 9 > 4) return true; // p1 can't touch right side
-        if (p.equals(p2) && slot % 9 < 4) return true; // p2 can't touch left side
+        if (cmd.equals("friend") || cmd.equals("friends")) return friendCommand(s,a);
+        if (cmd.equals("trade")) return tradeCommand(s,a);
         return false;
     }
-
-    public boolean isAcceptSlot(Player p, int slot) {
-        return (p.equals(p1) && slot == 40) || (p.equals(p2) && slot == 40); // Simple center controller trigger
-    }
-
-    public void toggleAccept(Player p) {
-        if (p.equals(p1)) p1Ready = !p1Ready;
-        if (p.equals(p2)) p2Ready = !p2Ready;
-        updateStatusButtons();
-        if (p1Ready && p2Ready) {
-            completeTrade();
+    private double priceFor(Material m) {
+        switch(m) {
+            case IRON_INGOT:return 100; case GOLD_INGOT:return 160; case DIAMOND:return 500;
+            case BOW:return 250; case ARROW:return 3; case IRON_SWORD:return 200;
+            case DIAMOND_SWORD:return 900; case IRON_CHESTPLATE:return 350;
+            case DIAMOND_CHESTPLATE:return 1800; case IRON_HELMET:return 200;
+            case DIAMOND_HELMET:return 800; case IRON_LEGGINGS:return 300;
+            case DIAMOND_LEGGINGS:return 1500; case IRON_BOOTS:return 180;
+            case DIAMOND_BOOTS:return 700; case ENCHANTED_BOOK:return 600;
+            case EXP_BOTTLE:return 5; case GOLDEN_APPLE:return 200; case ENDER_PEARL:return 100;
+            default:return 0;
         }
     }
-
-    private void completeTrade() {
-        // Complete items swapping safety code here
-        p1.sendMessage("§aTrade Completed Successfully!");
-        p2.sendMessage("§aTrade Completed Successfully!");
-        p1.closeInventory();
-        p2.closeInventory();
+    private boolean friendCommand(CommandSender s,String[] a) {
+        if(!(s instanceof Player)){msg(s,"Players only.");return true;} Player p=(Player)s; UUID id=p.getUniqueId();load(id);
+        if(a.length==0 || a[0].equalsIgnoreCase("list") || s instanceof Player && s.getName().equalsIgnoreCase("friends")) {
+            msg(p,"Friends: "+(friends.get(id).isEmpty()?"none":names(friends.get(id))));return true;
+        }
+        if(a[0].equalsIgnoreCase("accept")) {
+            UUID from=friendRequests.remove(id); if(from==null){msg(p,"No pending friend request.");return true;}
+            load(from);friends.get(id).add(from);friends.get(from).add(id);save(id);save(from);
+            Player other=Bukkit.getPlayer(from);msg(p,"You are now friends with "+(other==null?Bukkit.getOfflinePlayer(from).getName():other.getName())+".");if(other!=null)msg(other,p.getName()+" accepted your friend request.");return true;
+        }
+        Player t=online(a[0]);if(t==null || t.equals(p)){msg(p,"That player must be online and cannot be you.");return true;}
+        load(t.getUniqueId());if(friends.get(id).contains(t.getUniqueId())){msg(p,"You are already friends.");return true;}
+        friendRequests.put(t.getUniqueId(),id);msg(p,"Friend request sent to "+t.getName()+".");msg(t,p.getName()+" sent you a friend request. Use /friend accept.");return true;
     }
-
-    public void cancel() {
-        p1.sendMessage("§cTrade cancelled.");
-        p2.sendMessage("§cTrade cancelled.");
+    private String names(Set<UUID> ids) {
+        List<String> out=new ArrayList<String>();for(UUID id:ids){String n=Bukkit.getOfflinePlayer(id).getName();out.add(n==null?id.toString().substring(0,8):n);}return out.toString();
     }
+    private boolean tradeCommand(CommandSender s,String[] a) {
+        if(!(s instanceof Player)){msg(s,"Players only.");return true;} Player p=(Player)s;UUID id=p.getUniqueId();load(id);
+        if(a.length==0){msg(p,"/trade <player>, /trade accept, /trade item, /trade money <amount>, /trade confirm, /trade cancel");return true;}
+        if(a[0].equalsIgnoreCase("accept")) {
+            UUID from=tradeRequests.remove(id);if(from==null){msg(p,"No pending trade request.");return true;}
+            Player other=Bukkit.getPlayer(from);if(other==null){msg(p,"That player is offline.");return true;}
+            Trade t=new Trade(from,id);trades.put(from,t);trades.put(id,t);
+            tradeItems.put(from,new ArrayList<ItemStack>());tradeItems.put(id,new ArrayList<ItemStack>());tradeMoney.put(from,0.0);tradeMoney.put(id,0.0);
+            msg(p,"Trade started with "+other.getName()+". Use /trade item while holding an item, /trade money <amount>, then both use /trade confirm.");
+            msg(other,"Trade started with "+p.getName()+". Use /trade item while holding an item, /trade money <amount>, then both use /trade confirm.");return true;
+        }
+        Trade t=trades.get(id);if(a[0].equalsIgnoreCase("cancel")){if(t!=null)cancelTrade(t,"Trade cancelled.");else msg(p,"No active trade.");return true;}
+        if(t==null){if(a[0].equalsIgnoreCase("confirm")||a[0].equalsIgnoreCase("item")||a[0].equalsIgnoreCase("money")){msg(p,"You have no active trade.");return true;}
+            Player target=online(a[0]);if(target==null||target.equals(p)){msg(p,"That player must be online and cannot be you.");return true;}
+            tradeRequests.put(target.getUniqueId(),id);msg(p,"Trade request sent to "+target.getName()+".");msg(target,p.getName()+" wants to trade. Use /trade accept.");return true;}
+        if(a[0].equalsIgnoreCase("item")) {
+            ItemStack hand=p.getItemInHand();if(hand==null||hand.getType()==Material.AIR){msg(p,"Hold the item you want to offer.");return true;}
+            tradeItems.get(id).add(hand.clone());p.setItemInHand(null);t.confirmed.clear();tellTrade(t,"Item added to "+p.getName()+"'s offer. Both players must confirm again.");return true;
+        }
+        if(a[0].equalsIgnoreCase("money")) {
+            if(a.length!=2||!amount(a[1])){msg(p,"Usage: /trade money <amount>");return true;}
+            double v=Double.parseDouble(a[1]);if(balances.get(id)<v){msg(p,"Not enough money.");return true;}
+            tradeMoney.put(id,v);t.confirmed.clear();tellTrade(t,p.getName()+" offered $"+money(v)+". Both players must confirm again.");return true;
+        }
+        if(a[0].equalsIgnoreCase("confirm")) {
+            t.confirmed.add(id);UUID other=t.other(id);Player op=Bukkit.getPlayer(other);msg(p,"Trade confirmed. Waiting for the other player.");
+            if(t.confirmed.size()==2) {
+                if(op==null){cancelTrade(t,"Trade cancelled because a player went offline.");return true;}
+                if(balances.get(id)<tradeMoney.get(id)||balances.get(other)<tradeMoney.get(other)){cancelTrade(t,"Trade cancelled: one player no longer has enough money.");return true;}
+                for(UUID who:Arrays.asList(id,other)) {
+                    Player recipient=Bukkit.getPlayer(who);UUID from=who.equals(id)?other:id;
+                    for(ItemStack item:tradeItems.get(from)) { Map<Integer,ItemStack> leftover=recipient.getInventory().addItem(item.clone()); for(ItemStack rem:leftover.values()) recipient.getWorld().dropItemNaturally(recipient.getLocation(),rem); }
+                    balances.put(who,balances.get(who)-tradeMoney.get(who)+tradeMoney.get(from));
+                    tradesCompleted.put(who,tradesCompleted.get(who)+1);save(who);
+                }
+                tellTrade(t,"Trade completed successfully.");clearTrade(t);
+            } return true;
+        }
+        msg(p,"Unknown trade option.");return true;
+    }
+    private void tellTrade(Trade t,String m){Player a=Bukkit.getPlayer(t.a),b=Bukkit.getPlayer(t.b);if(a!=null)msg(a,m);if(b!=null)msg(b,m);}
+    private void clearTrade(Trade t){trades.remove(t.a);trades.remove(t.b);tradeItems.remove(t.a);tradeItems.remove(t.b);tradeMoney.remove(t.a);tradeMoney.remove(t.b);t.confirmed.clear();}
+    private void cancelTrade(Trade t,String reason){
+        for(UUID id:Arrays.asList(t.a,t.b)){Player p=Bukkit.getPlayer(id);if(p!=null){List<ItemStack> its=tradeItems.get(id);if(its!=null)for(ItemStack it:its){Map<Integer,ItemStack> left=p.getInventory().addItem(it);for(ItemStack rem:left.values())p.getWorld().dropItemNaturally(p.getLocation(),rem);}}}
+        tellTrade(t,reason);clearTrade(t);
+    }
+    private class Trade { UUID a,b;Set<UUID> confirmed=new HashSet<UUID>();Trade(UUID x,UUID y){a=x;b=y;} UUID other(UUID id){return id.equals(a)?b:a;} }
+    @EventHandler public void onJoin(PlayerJoinEvent e) { load(e.getPlayer().getUniqueId()); save(e.getPlayer().getUniqueId()); }
 }
