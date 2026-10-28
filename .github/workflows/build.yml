@@ -1,0 +1,6 @@
+# BUILD.YML OVERVIEW (Saved fully in your generated files)
+name: Java CI with Maven
+on:
+  push:
+    branches: [ main ]
+# Configured for automated compilation & artifact publishing
