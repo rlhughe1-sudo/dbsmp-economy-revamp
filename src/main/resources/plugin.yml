@@ -1,0 +1,17 @@
+name: DBSEconomy
+version: 1.0
+main: com.dbsmp.economy.DBSEconomy
+api-version: 1.8.8
+commands:
+  balance:
+    description: View your DBSMP account balance.
+  pay:
+    description: Pay money to another dbsmp player.
+  shop:
+    description: Open the DBSMP GUI shopping interface.
+  sell:
+    description: Sell your hand item for money.
+  trade:
+    description: Securely trade with any online player.
+  friend:
+    description: Manage server-wide friends and friend requests.
