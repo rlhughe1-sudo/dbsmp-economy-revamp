@@ -1,6 +1,31 @@
-# BUILD.YML OVERVIEW (Saved fully in your generated files)
-name: Java CI with Maven
+
+name: Build DBSMP Economy
+
 on:
   push:
     branches: [ main ]
-# Configured for automated compilation & artifact publishing
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '8'
+          cache: maven
+
+      - name: Build plugin
+        run: mvn -B clean package
+
+      - name: Upload plugin JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: DBSMPEconomy
+          path: target/DBSMPEconomy.jar
