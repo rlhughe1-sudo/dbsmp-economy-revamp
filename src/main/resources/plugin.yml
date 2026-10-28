@@ -1,17 +1,18 @@
-name: DBSEconomy
-version: 1.0
-main: com.dbsmp.economy.DBSEconomy
-api-version: 1.8.8
+name: DBSMPEconomy
+main: com.ryden.dbsmp.DBSMPEconomy
+version: 1.0.0
+author: RydenVR
+description: Economy, shop, selling, trading, and friend requests for Paper 1.8.8.
 commands:
-  balance:
-    description: View your DBSMP account balance.
-  pay:
-    description: Pay money to another dbsmp player.
-  shop:
-    description: Open the DBSMP GUI shopping interface.
-  sell:
-    description: Sell your hand item for money.
-  trade:
-    description: Securely trade with any online player.
-  friend:
-    description: Manage server-wide friends and friend requests.
+  bal: {description: Check your balance, usage: /bal [player]}
+  pay: {description: Send money, usage: /pay <player> <amount>}
+  shop: {description: Open the item shop}
+  sell: {description: Sell the item in your hand, usage: /sell [hand|all]}
+  trade: {description: Request and manage trades, usage: /trade <player|accept|item|money|confirm|cancel>}
+  friend: {description: Send or accept friend requests, usage: /friend <player|accept|list>}
+  friends: {description: List your friends}
+  eco: {description: Admin economy commands, usage: /eco <give|take|set> <player> <amount>}
+permissions:
+  dbsmp.admin:
+    description: Administer the economy
+    default: op
