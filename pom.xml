@@ -1,0 +1,9 @@
+<!-- POM.XML OVERVIEW (Saved fully in your generated files) -->
+<project xmlns="http://apache.org">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>com.dbsmp.economy</groupId>
+    <artifactId>DBSEconomy</artifactId>
+    <version>1.0.0</version>
+    <!-- Configured for Java 8 compatibility -->
+    <!-- Includes Spigot-API 1.8.8-R0.1-SNAPSHOT -->
+</project>
